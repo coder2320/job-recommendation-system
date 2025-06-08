@@ -1,30 +1,58 @@
 import streamlit as st
-import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+import os
+from dotenv import load_dotenv
+from utils.parser import extract_text_from_pdf, extract_skills
+import requests
 
-# Load data
-resumes = pd.read_csv('data/resumes.csv')
-jobs = pd.read_csv('data/job_descriptions.csv')
+# Load API key securely
+load_dotenv()
+api_key = os.getenv("RAPIDAPI_KEY")
 
-st.title('Job Recommendation System')
+# Function to fetch live jobs using RapidAPI JSearch
+def fetch_live_jobs(query):
+    url = "https://jsearch.p.rapidapi.com/search"
+    headers = {
+        "X-RapidAPI-Key": api_key,
+        "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
+    }
+    params = {"query": query, "page": 1, "num_pages": 1}
 
-# Select resume
-selected_resume_id = st.selectbox('Select Your Resume:', resumes['id'])
-selected_resume_text = resumes[resumes['id'] == selected_resume_id]['resume_text'].values[0]
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            return response.json().get("data", [])
+    except Exception as e:
+        st.error(f"Error fetching jobs: {e}")
+    return []
 
-# Combine texts
-texts = jobs['job_description'].tolist()
-texts.insert(0, selected_resume_text)
+# --- Streamlit UI ---
+st.set_page_config(page_title="Smart Job Recommender", layout="centered")
+st.title("📄 Smart Job Recommendation System")
+st.write("Upload your resume and get live job suggestions based on your skills!")
 
-# TF-IDF and cosine similarity
-vectorizer = TfidfVectorizer()
-tfidf_matrix = vectorizer.fit_transform(texts)
-cosine_sim = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
+uploaded_file = st.file_uploader("📤 Upload your resume (PDF only)", type="pdf")
 
-# Show results
-jobs['Similarity Score'] = cosine_sim
-top_matches = jobs.sort_values('Similarity Score', ascending=False)
+if uploaded_file:
+    with st.spinner("🔍 Extracting skills from resume..."):
+        resume_text = extract_text_from_pdf(uploaded_file)
+        extracted_skills = extract_skills(resume_text)
 
-st.subheader('Top Job Matches:')
-st.dataframe(top_matches[['job_description', 'Similarity Score']])
+    if extracted_skills:
+        st.success("✅ Skills Extracted Successfully!")
+        st.write("**Skills Identified:**", ", ".join(extracted_skills))
+
+        # Fetch real jobs
+        st.subheader("🌐 Matching Live Job Listings")
+        query = " ".join(extracted_skills[:3]) if extracted_skills else "developer"
+        live_jobs = fetch_live_jobs(query)
+
+        if live_jobs:
+            for job in live_jobs:
+                st.markdown(f"### {job.get('job_title', 'No Title')}")
+                st.markdown(f"**{job.get('employer_name', 'Unknown Company')} - {job.get('job_city', 'Unknown Location')}**")
+                st.markdown(f"[Apply Here]({job.get('job_apply_link', '#')})")
+                st.markdown("---")
+        else:
+            st.info("No jobs found for extracted skills. Try uploading a more detailed resume.")
+    else:
+        st.warning("❌ No skills detected. Please upload a different resume.")
